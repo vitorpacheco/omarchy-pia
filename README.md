@@ -71,6 +71,7 @@ omarchy-shell pia disconnect
 omarchy-shell pia setRegion uk-london
 omarchy-shell pia status     # prints e.g. "Connected"
 omarchy-shell pia region     # prints the region id
+omarchy-shell pia account    # account name once known, else "unknown"
 omarchy-shell pia toggle     # open/close the panel
 ```
 
@@ -87,7 +88,17 @@ settings UI):
 | `notifications`      | `true`  | Desktop notification on connect / disconnect / interrupted.  |
 | `maxRecentRegions`   | `5`     | How many recent regions to pin in the panel.                 |
 
-`recentRegions` is written by the widget itself.
+`recentRegions` and `accountName` are written by the widget itself.
+
+## Account detection
+
+`piactl` has no command to report the logged-in account, and the PIA daemon
+socket rejects clients other than its own binaries, so the account name cannot
+be read from a normal process without side effects. The widget therefore
+treats an active connection as "logged in" (you cannot connect otherwise) and
+learns the account name only when you log in through its own terminal prompt,
+caching it in `accountName`. If you were already logged in before installing
+the widget, log out and back in through it once to record the name.
 
 ## Development
 

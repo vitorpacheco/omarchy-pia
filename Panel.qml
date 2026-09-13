@@ -34,13 +34,13 @@ Panel {
   readonly property string heroMeta: {
     if (!pia.installed) return pia.checkedInstall ? "piactl not found" : "Looking for piactl…"
     if (!pia.daemonUp) return pia.stateLabel
-    if (pia.connected) return "Connected · " + pia.regionLabel
+    if (pia.connected) return (pia.accountName !== "" ? pia.accountName + " · " : "") + "Connected · " + pia.regionLabel
     if (pia.transitioning) return pia.stateLabel + " · " + pia.regionLabel
     if (pia._desired === 1) return "Connecting…"
     return "Disconnected"
   }
-  // The hero pill is small: just the protocol, the IPs get their own rows.
-  readonly property string heroDetail: pia.connected ? pia.protocolLabel : ""
+  // No hero pill: it truncates the title, and the protocol has its own row.
+  readonly property string heroDetail: ""
 
   readonly property var rows: buildRows()
   readonly property int searchPos: indexOfKind(rows, "search")
@@ -139,7 +139,7 @@ Panel {
     // piactl has no "am I logged in" query, so the VPN state is the proxy:
     // connected means a valid session, anything else offers to log in. The
     // needsLogin call-to-action at the top already covers that case.
-    if (pia.connected) list.push({ kind: "row", id: "logout", icon: "󰗼", title: "Log out", subtitle: "Forget the PIA session on this machine", action: "logout" })
+    if (pia.connected) list.push({ kind: "row", id: "logout", icon: "󰗼", title: "Log out", subtitle: pia.accountName !== "" ? "Signed in as " + pia.accountName : "Forget the PIA session on this machine", action: "logout" })
     else if (!pia.needsLogin) list.push({ kind: "row", id: "login", icon: "󰌆", title: "Log in", subtitle: "Opens a terminal to enter your credentials", action: "login" })
     return list
   }
@@ -296,6 +296,15 @@ Panel {
     if (pickerOpen) closePicker()
   }
 
+  function persistAccount(name) {
+    if (!root.bar || !root.bar.shell || typeof root.bar.shell.updateEntryInline !== "function") return
+    var entry = { id: root.moduleName }
+    for (var key in settings) if (key !== "id") entry[key] = settings[key]
+    if (String(name || "") === "") delete entry.accountName
+    else entry.accountName = String(name)
+    root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
   function persistRecent(id) {
     var next = Model.pushRecent(recentRegions, id, pia.maxRecentRegions)
     if (!root.bar || !root.bar.shell || typeof root.bar.shell.updateEntryInline !== "function") return
@@ -357,6 +366,7 @@ Panel {
     id: pia
     settings: root.settings
     onRegionApplied: function(id) { root.persistRecent(id) }
+    onAccountLearned: function(name) { root.persistAccount(name) }
   }
 
   // Rows scroll and rebuild under a stationary pointer all the time (every
@@ -380,6 +390,7 @@ Panel {
     function refresh(): string { pia.refresh(true); return "ok" }
     function status(): string { return pia.stateLabel }
     function region(): string { return pia.region }
+    function account(): string { return pia.accountName !== "" ? pia.accountName : "unknown" }
     function setRegion(id: string): string { pia.setRegion(id); return "ok" }
   }
 

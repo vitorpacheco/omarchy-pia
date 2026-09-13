@@ -7,6 +7,9 @@
 set -uo pipefail
 
 CTL="${1:-piactl}"
+MARKER="${2:-}"
+
+mark() { [[ -n $MARKER ]] && printf '%s\n' "$1" >"$MARKER"; return 0; }
 
 if ! command -v "$CTL" >/dev/null 2>&1 && [[ ! -x $CTL ]]; then
   echo "piactl not found at '$CTL'. Install the PIA client first (yay -S piavpn-bin)." >&2
@@ -36,9 +39,24 @@ trap cleanup EXIT
 printf '%s\n%s\n' "$username" "$password" >"$credentials"
 
 echo
-if "$CTL" login "$credentials"; then
-  gum style --foreground 2 "Logged in. You can close this window."
+echo
+output=$("$CTL" login "$credentials" 2>&1)
+status=$?
+[[ -n $output ]] && echo "$output"
+
+if (( status == 0 )); then
+  mark "$username"
+  gum style --foreground 2 "Logged in as $username. You can close this window."
   sleep 1.5
+  exit 0
+fi
+
+# piactl refuses a second login while a session exists; treat that as success
+# and record the account it names.
+if [[ $output =~ Already\ logged\ into\ account[[:space:]]+([^[:space:]]+) ]]; then
+  mark "${BASH_REMATCH[1]}"
+  gum style --foreground 3 "Already logged in as ${BASH_REMATCH[1]}. Log out first to switch accounts."
+  sleep 2
   exit 0
 fi
 

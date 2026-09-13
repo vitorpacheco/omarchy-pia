@@ -39,6 +39,11 @@ Item {
   property bool allowLan: false
   property var regions: []
   property bool needsLogin: false
+  // piactl exposes no account query and the daemon socket rejects foreign
+  // clients, so the account name can only be learned when the user logs in
+  // through this widget: bin/pia-login writes it to a marker file we read.
+  // It is persisted in settings, so it survives restarts once known.
+  property string accountName: Model.stringSetting(settings, "accountName", "")
 
   // UI feedback
   property bool refreshing: false
@@ -260,17 +265,31 @@ Item {
     setAllowLan(!allowLan)
   }
 
+  readonly property string loginMarker: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-pia-login." + (Quickshell.env("USER") || "user")
+  property string _markerOutput: ""
+
   function login() {
     if (!installed) return
-    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=pia-login", "bash", pluginDir + "bin/pia-login", ctl])
+    Quickshell.execDetached(["bash", "-c", "rm -f \"$1\"; exec omarchy-launch-tui --app-id=pia-login bash \"$2\" \"$3\" \"$1\"", "pia-login-launch", loginMarker, pluginDir + "bin/pia-login", ctl])
     actionStatus = "Opened the PIA login in a terminal"
     actionStatusTimer.restart()
     loginPollTimer.restart()
   }
 
+  signal accountLearned(string name)
+
+  function rememberAccount(name) {
+    var value = String(name || "").trim()
+    if (value === "" || value === accountName) return
+    accountName = value
+    accountLearned(value)
+  }
+
   function logout() {
     if (!installed || actionProcess.running) return
     _desired = -1
+    accountName = ""
+    accountLearned("")
     runAction([ctl, "logout"], "Logging out…")
   }
 
@@ -374,12 +393,17 @@ Item {
     // reflects the new session without waiting for the next interval.
     id: loginPollTimer
     property int ticks: 0
-    interval: 3000
+    interval: 2000
     repeat: true
     onTriggered: {
       ticks += 1
       root.refresh()
-      if (ticks >= 40) { ticks = 0; loginPollTimer.stop() }
+      if (!markerProcess.running) {
+        root._markerOutput = ""
+        markerProcess.command = ["bash", "-c", "[ -f \"$1\" ] || exit 3; cat \"$1\"; rm -f \"$1\"", "pia-marker", root.loginMarker]
+        markerProcess.running = true
+      }
+      if (ticks >= 90) { ticks = 0; loginPollTimer.stop() }
     }
     onRunningChanged: if (running) ticks = 0
   }
@@ -505,6 +529,23 @@ Item {
         if (/…$/.test(root.actionStatus)) root.actionStatus = ""
         else actionStatusTimer.restart()
       }
+      delayedRefresh.restart()
+    }
+  }
+
+  Process {
+    id: markerProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: markerStdout; waitForEnd: true; onStreamFinished: root._markerOutput = text }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) return
+      var name = String(markerStdout.text || root._markerOutput || "").trim()
+      if (name === "") return
+      root.rememberAccount(name)
+      loginPollTimer.stop()
+      root.actionStatus = "Logged in as " + name
+      actionStatusTimer.restart()
       delayedRefresh.restart()
     }
   }
