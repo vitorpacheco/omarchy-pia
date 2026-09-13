@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.vitorpacheco.pia",
+  "name": "Private Internet Access",
+  "version": "0.1.0",
+  "author": "Vitor Pacheco",
+  "license": "MIT",
+  "description": "Private Internet Access VPN in the Omarchy bar: connect, disconnect, pick a region, switch protocol, port forwarding and quick IP copy, all through piactl.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Private Internet Access",
+    "description": "Toggle the PIA VPN, choose a region, switch protocol and copy your VPN or public IP.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "ctlPath": "",
+      "backgroundMode": true,
+      "notifications": true,
+      "maxRecentRegions": 5
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "description": "Fallback polling. State changes are also pushed live by piactl monitor, so this only matters when the monitor is unavailable.",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "ctlPath",
+        "type": "path",
+        "label": "Path to piactl",
+        "description": "Leave empty to find piactl on PATH or in /opt/piavpn/bin.",
+        "defaultValue": ""
+      },
+      {
+        "key": "backgroundMode",
+        "type": "boolean",
+        "label": "Enable background mode before connecting",
+        "description": "Runs `piactl background enable` so the VPN stays up without the PIA desktop client open.",
+        "defaultValue": true
+      },
+      {
+        "key": "notifications",
+        "type": "boolean",
+        "label": "Notify on connection changes",
+        "description": "Send a desktop notification when the VPN connects, disconnects or is interrupted.",
+        "defaultValue": true
+      },
+      {
+        "key": "maxRecentRegions",
+        "type": "integer",
+        "label": "Recent regions to keep",
+        "description": "How many recently used regions to pin under the Regions section.",
+        "min": 0,
+        "max": 10,
+        "step": 1,
+        "defaultValue": 5
+      }
+    ]
+  }
+}

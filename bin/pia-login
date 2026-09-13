@@ -1,0 +1,48 @@
+#!/bin/bash
+# Interactive login for Private Internet Access, launched in a terminal by the
+# Omarchy bar widget. piactl only accepts credentials from a file, so this
+# collects them with gum, writes them to a private temp file, hands it to
+# piactl and shreds it again.
+
+set -uo pipefail
+
+CTL="${1:-piactl}"
+
+if ! command -v "$CTL" >/dev/null 2>&1 && [[ ! -x $CTL ]]; then
+  echo "piactl not found at '$CTL'. Install the PIA client first (yay -S piavpn-bin)." >&2
+  read -rsn1 -p "Press any key to close." _
+  exit 1
+fi
+
+echo
+gum style --bold "Private Internet Access login"
+echo "Your credentials are only written to a private temp file for piactl and removed right after."
+echo
+
+username=$(gum input --placeholder "p1234567" --prompt "Username: ") || exit 1
+[[ -n $username ]] || { echo "No username given." >&2; exit 1; }
+password=$(gum input --password --prompt "Password: ") || exit 1
+[[ -n $password ]] || { echo "No password given." >&2; exit 1; }
+
+credentials=$(mktemp --tmpdir pia-login.XXXXXX) || exit 1
+chmod 600 "$credentials"
+cleanup() {
+  if command -v shred >/dev/null 2>&1; then shred -u "$credentials" 2>/dev/null || rm -f "$credentials"
+  else rm -f "$credentials"
+  fi
+}
+trap cleanup EXIT
+
+printf '%s\n%s\n' "$username" "$password" >"$credentials"
+
+echo
+if "$CTL" login "$credentials"; then
+  gum style --foreground 2 "Logged in. You can close this window."
+  sleep 1.5
+  exit 0
+fi
+
+echo
+gum style --foreground 1 "Login failed."
+read -rsn1 -p "Press any key to close." _
+exit 1
