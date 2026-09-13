@@ -136,9 +136,11 @@ Panel {
       toggle: true, checked: pia.allowLan, busy: pia.pendingSetting === "allowlan", action: "allowlan" })
 
     list.push({ kind: "section", id: "sec-account", text: "ACCOUNT" })
-    if (!pia.needsLogin) list.push({ kind: "row", id: "login", icon: "󰌆", title: "Log in", subtitle: "Opens a terminal to enter your credentials", action: "login" })
-    list.push({ kind: "row", id: "logout", icon: "󰗼", title: "Log out", subtitle: "Forget the PIA session on this machine", action: "logout" })
-    if (pia.clientAvailable) list.push({ kind: "row", id: "client", icon: "󰀄", title: "Open the PIA app", subtitle: "Settings piactl does not expose", action: "client" })
+    // piactl has no "am I logged in" query, so the VPN state is the proxy:
+    // connected means a valid session, anything else offers to log in. The
+    // needsLogin call-to-action at the top already covers that case.
+    if (pia.connected) list.push({ kind: "row", id: "logout", icon: "󰗼", title: "Log out", subtitle: "Forget the PIA session on this machine", action: "logout" })
+    else if (!pia.needsLogin) list.push({ kind: "row", id: "login", icon: "󰌆", title: "Log in", subtitle: "Opens a terminal to enter your credentials", action: "login" })
     return list
   }
 
@@ -252,7 +254,6 @@ Panel {
     case "protocol": pia.toggleProtocol(); break
     case "portforward": pia.togglePortForward(); break
     case "allowlan": pia.toggleAllowLan(); break
-    case "client": pia.openClient(); break
     default: break
     }
   }

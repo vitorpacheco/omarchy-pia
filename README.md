@@ -19,7 +19,7 @@ open.
 - WireGuard / OpenVPN switch, port forwarding request (shows the forwarded
   port), and LAN access toggle.
 - Log in from a terminal prompt (credentials only ever touch a private temp
-  file that is shredded afterwards), log out, open the PIA app.
+  file that is shredded afterwards) and log out.
 - Live updates via `piactl monitor`, plus a polling fallback.
 - Optional desktop notifications when the VPN connects, drops or is
   interrupted.

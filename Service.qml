@@ -23,7 +23,6 @@ Item {
   property bool installed: false
   property bool checkedInstall: false
   property string ctl: ""
-  property bool clientAvailable: false
 
   // Live state from piactl
   property bool daemonUp: false
@@ -86,7 +85,6 @@ Item {
     "  [ -n \"$c\" ] || continue\n" +
     "  if p=$(command -v \"$c\" 2>/dev/null) && [ -x \"$p\" ]; then\n" +
     "    printf 'ctl=%s\\n' \"$p\"\n" +
-    "    if command -v pia-client >/dev/null 2>&1 || [ -x /opt/piavpn/bin/pia-client ]; then printf 'client=1\\n'; fi\n" +
     "    exit 0\n" +
     "  fi\n" +
     "done\n" +
@@ -276,11 +274,6 @@ Item {
     runAction([ctl, "logout"], "Logging out…")
   }
 
-  function openClient() {
-    if (!clientAvailable) return
-    Quickshell.execDetached(["bash", "-c", "command -v pia-client >/dev/null 2>&1 && exec pia-client; exec /opt/piavpn/bin/pia-client"])
-  }
-
   function copyToClipboard(value, label) {
     var text = String(value || "")
     if (text === "") return
@@ -427,7 +420,6 @@ Item {
       var parsed = Model.parseStatus(String(whichStdout.text || ""))
       var found = exitCode === 0 && parsed.values.ctl
       root.installed = !!found
-      root.clientAvailable = !!(found && parsed.values.client === "1")
       if (root.installed) {
         root.ctl = String(parsed.values.ctl)
         root.refreshStatus(true)
