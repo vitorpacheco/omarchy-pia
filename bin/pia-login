@@ -9,23 +9,73 @@ set -uo pipefail
 CTL="${1:-piactl}"
 MARKER="${2:-}"
 
+# The panel passes its resolved language; standalone use follows the same
+# LC_ALL > LC_MESSAGES > LANG precedence and falls back to English.
+login_locale="${3:-${LC_ALL:-${LC_MESSAGES:-${LANG:-en}}}}"
+login_locale="${login_locale,,}"
+login_language="${login_locale%%[-_.@]*}"
+declare -A messages=(
+  [missing]="piactl not found at '%s'. Install the PIA client first (yay -S piavpn-bin)."
+  [close]="Press any key to close."
+  [title]="Private Internet Access login"
+  [privacy]="Your credentials are only written to a private temp file for piactl and removed right after."
+  [username]="Username: "
+  [no_username]="No username given."
+  [password]="Password: "
+  [no_password]="No password given."
+  [success]="Logged in as %s. You can close this window."
+  [already]="Already logged in as %s. Log out first to switch accounts."
+  [failed]="Login failed."
+)
+case "$login_language" in
+  es)
+    messages[missing]="No se encontró piactl en '%s'. Instala primero el cliente de PIA (yay -S piavpn-bin)."
+    messages[close]="Pulsa cualquier tecla para cerrar."
+    messages[title]="Inicio de sesión en Private Internet Access"
+    messages[privacy]="Tus credenciales solo se guardan en un archivo temporal privado para piactl y se eliminan inmediatamente después."
+    messages[username]="Usuario: "
+    messages[no_username]="No se indicó un usuario."
+    messages[password]="Contraseña: "
+    messages[no_password]="No se indicó una contraseña."
+    messages[success]="Sesión iniciada como %s. Puedes cerrar esta ventana."
+    messages[already]="Ya hay una sesión iniciada como %s. Cierra la sesión antes de cambiar de cuenta."
+    messages[failed]="Error al iniciar sesión."
+    ;;
+  pt)
+    messages[missing]="piactl não encontrado em '%s'. Instale primeiro o cliente da PIA (yay -S piavpn-bin)."
+    messages[close]="Pressione qualquer tecla para fechar."
+    messages[title]="Login na Private Internet Access"
+    messages[privacy]="Suas credenciais são gravadas apenas em um arquivo temporário privado para o piactl e removidas logo depois."
+    messages[username]="Usuário: "
+    messages[no_username]="Nenhum usuário informado."
+    messages[password]="Senha: "
+    messages[no_password]="Nenhuma senha informada."
+    messages[success]="Conectado como %s. Você pode fechar esta janela."
+    messages[already]="Já existe uma sessão como %s. Saia antes de trocar de conta."
+    messages[failed]="Falha no login."
+    ;;
+esac
+
+# Format strings come only from the catalog; credentials are never evaluated.
+tr_login() { local key="$1"; shift; printf "${messages[$key]}" "$@"; }
+
 mark() { [[ -n $MARKER ]] && printf '%s\n' "$1" >"$MARKER"; return 0; }
 
 if ! command -v "$CTL" >/dev/null 2>&1 && [[ ! -x $CTL ]]; then
-  echo "piactl not found at '$CTL'. Install the PIA client first (yay -S piavpn-bin)." >&2
-  read -rsn1 -p "Press any key to close." _
+  printf '%s\n' "$(tr_login missing "$CTL")" >&2
+  read -rsn1 -p "$(tr_login close)" _
   exit 1
 fi
 
 echo
-gum style --bold "Private Internet Access login"
-echo "Your credentials are only written to a private temp file for piactl and removed right after."
+gum style --bold "$(tr_login title)"
+echo "$(tr_login privacy)"
 echo
 
-username=$(gum input --placeholder "p1234567" --prompt "Username: ") || exit 1
-[[ -n $username ]] || { echo "No username given." >&2; exit 1; }
-password=$(gum input --password --prompt "Password: ") || exit 1
-[[ -n $password ]] || { echo "No password given." >&2; exit 1; }
+username=$(gum input --placeholder "p1234567" --prompt "$(tr_login username)") || exit 1
+[[ -n $username ]] || { echo "$(tr_login no_username)" >&2; exit 1; }
+password=$(gum input --password --prompt "$(tr_login password)") || exit 1
+[[ -n $password ]] || { echo "$(tr_login no_password)" >&2; exit 1; }
 
 credentials=$(mktemp --tmpdir pia-login.XXXXXX) || exit 1
 chmod 600 "$credentials"
@@ -46,7 +96,7 @@ status=$?
 
 if (( status == 0 )); then
   mark "$username"
-  gum style --foreground 2 "Logged in as $username. You can close this window."
+  gum style --foreground 2 "$(tr_login success "$username")"
   sleep 1.5
   exit 0
 fi
@@ -55,12 +105,12 @@ fi
 # and record the account it names.
 if [[ $output =~ Already\ logged\ into\ account[[:space:]]+([^[:space:]]+) ]]; then
   mark "${BASH_REMATCH[1]}"
-  gum style --foreground 3 "Already logged in as ${BASH_REMATCH[1]}. Log out first to switch accounts."
+  gum style --foreground 3 "$(tr_login already "${BASH_REMATCH[1]}")"
   sleep 2
   exit 0
 fi
 
 echo
-gum style --foreground 1 "Login failed."
-read -rsn1 -p "Press any key to close." _
+gum style --foreground 1 "$(tr_login failed)"
+read -rsn1 -p "$(tr_login close)" _
 exit 1

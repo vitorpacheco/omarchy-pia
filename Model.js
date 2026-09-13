@@ -3,6 +3,8 @@
 // effects — everything here takes plain values and returns plain values so it
 // can be exercised from the tests without a running shell.
 
+var SHIELD_GLYPH = "󰒃"
+
 // piactl connection states. Anything not listed is treated as "busy" so an
 // unknown transitional state never renders as connected or disconnected.
 var STATES = {
@@ -179,6 +181,15 @@ function regionLabel(id) {
   return parts.country + " · " + parts.city
 }
 
+// The daemon's location IDs use underscores, unlike piactl's selected region.
+function connectionRegionLabel(selected, actual, connected) {
+  var label = regionLabel(selected)
+  var location = String(actual || "").trim().replace(/_/g, "-")
+  if (selected === "auto" && connected && location !== "" && location !== "auto")
+    return label + " · " + regionLabel(location)
+  return label
+}
+
 function regionEntry(id) {
   var parts = regionParts(id)
   return {
@@ -205,14 +216,18 @@ function regionEntries(ids) {
   return entries
 }
 
+function searchText(value) {
+  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+}
+
 function filterRegions(entries, query) {
-  var q = String(query || "").trim().toLowerCase()
+  var q = searchText(query).trim()
   if (q === "") return entries
   var terms = q.split(/\s+/)
   var out = []
   for (var i = 0; i < entries.length; i++) {
     var e = entries[i]
-    var hay = (e.id + " " + e.label + " " + e.country + " " + e.city).toLowerCase()
+    var hay = searchText(e.id + " " + e.label + " " + e.country + " " + e.city + " " + (e.searchLabel || ""))
     var ok = true
     for (var t = 0; t < terms.length; t++) {
       if (hay.indexOf(terms[t]) === -1) { ok = false; break }
@@ -279,7 +294,7 @@ function elide(text, max) {
 }
 
 function looksLikeLoginError(text) {
-  return /not logged in|log in|login|credentials|unauthori[sz]ed/i.test(String(text || ""))
+  return /not logged in|logged in account|requires a logged|log in|login|credentials|unauthori[sz]ed/i.test(String(text || ""))
 }
 
 function looksLikeDaemonError(text) {

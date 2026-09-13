@@ -1,11 +1,13 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "I18n.js" as I18n
 
 // Bar button plus popup for Private Internet Access. All piactl traffic lives
 // in Service.qml; this file only renders state and forwards intents.
@@ -21,6 +23,9 @@ Panel {
   property string cursorRowId: ""
   property bool pickerOpen: false
   property string pickerQuery: ""
+  // IP addresses start blurred every time the panel opens; a toggle row (or
+  // the v key) reveals them for the current session only.
+  property bool revealIps: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -30,14 +35,14 @@ Panel {
   readonly property color selectedFill: bar ? Style.selectedFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property var recentRegions: settings.recentRegions instanceof Array ? settings.recentRegions : []
 
-  readonly property string toggleHint: pia.active ? "Disconnect from PIA" : "Connect to PIA"
+  readonly property string toggleHint: pia.active ? t("Disconnect from PIA") : t("Connect to PIA")
   readonly property string heroMeta: {
-    if (!pia.installed) return pia.checkedInstall ? "piactl not found" : "Looking for piactl…"
-    if (!pia.daemonUp) return pia.stateLabel
-    if (pia.connected) return (pia.accountName !== "" ? pia.accountName + " · " : "") + "Connected · " + pia.regionLabel
-    if (pia.transitioning) return pia.stateLabel + " · " + pia.regionLabel
-    if (pia._desired === 1) return "Connecting…"
-    return "Disconnected"
+    if (!pia.installed) return pia.checkedInstall ? t("piactl not found") : t("Looking for piactl…")
+    if (!pia.daemonUp) return t(pia.stateLabel)
+    if (pia.connected) return t("Connected") + " · " + pia.regionLabel
+    if (pia.transitioning) return t(pia.stateLabel) + " · " + pia.regionLabel
+    if (pia._desired === 1) return t("Connecting…")
+    return t("Disconnected")
   }
   // No hero pill: it truncates the title, and the protocol has its own row.
   readonly property string heroDetail: ""
@@ -46,6 +51,10 @@ Panel {
   readonly property int searchPos: indexOfKind(rows, "search")
   readonly property var topRows: searchPos < 0 ? rows : rows.slice(0, searchPos)
   readonly property var bottomRows: searchPos < 0 ? [] : rows.slice(searchPos + 1)
+
+  function t(source, values) { return pia.t(source, values) }
+
+  readonly property var localizedRegions: I18n.regionEntries(pia.language, pia.regions)
 
   function indexOfKind(list, kind) {
     for (var i = 0; i < list.length; i++) if (list[i].kind === kind) return i
@@ -64,9 +73,9 @@ Panel {
       kind: "row",
       id: prefix + entry.id,
       icon: regionIcon(entry),
-      title: entry.label,
-      subtitle: entry.auto ? "Let PIA pick the fastest server" : entry.id,
-      trailing: pia.pendingRegion === entry.id ? "…" : (entry.id === pia.region ? "current" : ""),
+      title: I18n.regionLabel(pia.language, entry.label),
+      subtitle: entry.auto ? (pia.region === "auto" && pia.connected && pia.connectedRegion !== "" ? pia.regionLabel : t("Let PIA pick the fastest server")) : entry.id,
+      trailing: pia.pendingRegion === entry.id ? "…" : (entry.id === pia.region ? t("current") : ""),
       current: entry.id === pia.region,
       busy: pia.pendingRegion === entry.id,
       action: "region",
@@ -79,68 +88,75 @@ Panel {
     if (!pia.installed) {
       if (pia.checkedInstall) {
         list.push({ kind: "hint", id: "hint-install",
-          text: "piactl was not found. Install the PIA desktop client (yay -S piavpn-bin), then run: sudo systemctl enable --now piavpn" })
-        list.push({ kind: "row", id: "retry", icon: "󰑐", title: "Look again", subtitle: "Re-check for piactl", action: "retry" })
+          text: t("piactl was not found. Install the PIA desktop client (yay -S piavpn-bin), then run: sudo systemctl enable --now piavpn") })
+        list.push({ kind: "row", id: "retry", icon: "󰑐", title: t("Look again"), subtitle: t("Re-check for piactl"), action: "retry" })
       }
       return list
     }
 
     if (!pia.daemonUp) {
       list.push({ kind: "hint", id: "hint-daemon",
-        text: (pia.lastError !== "" ? pia.lastError + " — " : "") + "Start the daemon with: sudo systemctl start piavpn" })
-      list.push({ kind: "row", id: "retry", icon: "󰑐", title: "Retry", subtitle: "Ask the daemon again", action: "retry" })
+        text: (pia.lastError !== "" ? pia.lastError + " — " : "") + t("Start the daemon with: sudo systemctl start piavpn") })
+      list.push({ kind: "row", id: "retry", icon: "󰑐", title: t("Retry"), subtitle: t("Ask the daemon again"), action: "retry" })
     }
 
     if (pia.needsLogin) {
-      list.push({ kind: "row", id: "login", icon: "󰌆", title: "Log in to PIA", subtitle: "Opens a terminal to enter your credentials", action: "login" })
+      list.push({ kind: "row", id: "login", icon: "󰌆", title: t("Log in to PIA"), subtitle: t("Opens a terminal to enter your credentials"), action: "login" })
     }
 
-    list.push({ kind: "section", id: "sec-connection", text: "CONNECTION" })
+    list.push({ kind: "section", id: "sec-connection", text: t("CONNECTION") })
     var currentEntry = Model.regionEntry(pia.region)
     list.push({
       kind: "row", id: "region",
       icon: regionIcon(currentEntry),
-      title: pia.region === "" ? "No region" : currentEntry.label,
-      subtitle: pia.pendingRegion !== "" ? "Switching to " + Model.regionLabel(pia.pendingRegion) + "…" : "Region · press enter to change",
+      title: pia.region === "" ? t("No region") : pia.regionLabel,
+      subtitle: pia.pendingRegion !== "" ? t("Switching to {name}…", { name: I18n.regionLabel(pia.language, Model.regionLabel(pia.pendingRegion)) }) : t("Region · press enter to change"),
       busy: pia.pendingRegion !== "",
       action: "picker"
     })
     if (pia.connected) {
-      list.push({ kind: "row", id: "vpnip", icon: "󰩟", title: pia.vpnIp !== "" ? pia.vpnIp : "—", subtitle: "VPN IP · copy with c", action: "copyVpn" })
-      list.push({ kind: "row", id: "pubip", icon: "󰖟", title: pia.pubIp !== "" ? pia.pubIp : "—", subtitle: "Public IP · copy with p", action: "copyPub" })
+      list.push({ kind: "row", id: "vpnip", icon: "󰩟", title: pia.vpnIp !== "" ? pia.vpnIp : "—", subtitle: t("VPN IP · copy with c"), action: "copyVpn", blur: !revealIps })
+      list.push({ kind: "row", id: "pubip", icon: "󰖟", title: pia.pubIp !== "" ? pia.pubIp : "—", subtitle: t("Public IP · copy with p"), action: "copyPub", blur: !revealIps })
+      list.push({ kind: "row", id: "revealips", icon: revealIps ? "󰈈" : "󰈉", title: t("Show IP addresses"), subtitle: revealIps ? t("Blur again with v") : t("Unblur the VPN and public IP · v"),
+        toggle: true, checked: revealIps, action: "revealips" })
     }
 
-    list.push({ kind: "section", id: "sec-regions", text: "REGIONS" })
+    list.push({ kind: "section", id: "sec-regions", text: t("REGIONS") })
     list.push({ kind: "search", id: "search" })
     if (pickerOpen) {
-      var filtered = Model.filterRegions(pia.regions, pickerQuery)
-      if (pia.regions.length === 0) list.push({ kind: "hint", id: "hint-noregions", text: "No region list yet. The daemon must be running to fetch it." })
-      else if (filtered.length === 0) list.push({ kind: "hint", id: "hint-nomatch", text: "No regions match \"" + pickerQuery + "\"." })
+      var filtered = Model.filterRegions(localizedRegions, pickerQuery)
+      if (pia.regions.length === 0) list.push({ kind: "hint", id: "hint-noregions", text: t("No region list yet. The daemon must be running to fetch it.") })
+      else if (filtered.length === 0) list.push({ kind: "hint", id: "hint-nomatch", text: t("No regions match “{query}”.", { query: pickerQuery }) })
       for (var i = 0; i < filtered.length; i++) list.push(regionRow(filtered[i], "pick:"))
     } else {
-      var pinned = Model.pinnedRegions(pia.region, recentRegions, pia.regions, pia.maxRecentRegions)
+      var pinned = Model.pinnedRegions(pia.region, recentRegions, localizedRegions, pia.maxRecentRegions)
       for (var j = 0; j < pinned.length; j++) list.push(regionRow(pinned[j], "pin:"))
-      list.push({ kind: "row", id: "choose", icon: "󰍉", title: "Choose region…",
-        subtitle: pia.regions.length > 0 ? pia.regions.length + " regions available" : "Region list not loaded yet", action: "picker" })
+      list.push({ kind: "row", id: "choose", icon: "󰍉", title: t("Choose region…"),
+        subtitle: pia.regions.length > 0 ? t(pia.regions.length === 1 ? "{count} region available" : "{count} regions available", { count: pia.regions.length }) : t("Region list not loaded yet"), action: "picker" })
     }
 
-    list.push({ kind: "section", id: "sec-settings", text: "SETTINGS" })
-    list.push({ kind: "row", id: "protocol", icon: "󰓡", title: "Protocol",
-      subtitle: "Switch to " + Model.protocolLabel(Model.otherProtocol(pia.protocol)),
+    list.push({ kind: "section", id: "sec-settings", text: t("SETTINGS") })
+    list.push({ kind: "row", id: "protocol", icon: "󰓡", title: t("Protocol"),
+      subtitle: t("Switch to {name}", { name: Model.protocolLabel(Model.otherProtocol(pia.protocol)) }),
       trailing: pia.protocolLabel, busy: pia.pendingSetting === "protocol", action: "protocol" })
-    list.push({ kind: "row", id: "portforward", icon: "󰁔", title: "Port forwarding",
-      subtitle: pia.requestPortForward ? pia.portForward.label : "Request a forwarded port on connect",
+    list.push({ kind: "row", id: "portforward", icon: "󰁔", title: t("Port forwarding"),
+      subtitle: pia.requestPortForward ? (pia.portForward.active ? t("Port {port}", { port: pia.portForward.port }) : t(pia.portForward.label)) : t("Request a forwarded port on connect"),
       toggle: true, checked: pia.requestPortForward, busy: pia.pendingSetting === "portforward", action: "portforward" })
-    list.push({ kind: "row", id: "allowlan", icon: "󰛳", title: "Allow LAN traffic",
-      subtitle: "Reach printers and local devices while connected",
+    list.push({ kind: "row", id: "allowlan", icon: "󰛳", title: t("Allow LAN traffic"),
+      subtitle: t("Reach printers and local devices while connected"),
       toggle: true, checked: pia.allowLan, busy: pia.pendingSetting === "allowlan", action: "allowlan" })
 
-    list.push({ kind: "section", id: "sec-account", text: "ACCOUNT" })
-    // piactl has no "am I logged in" query, so the VPN state is the proxy:
-    // connected means a valid session, anything else offers to log in. The
-    // needsLogin call-to-action at the top already covers that case.
-    if (pia.connected) list.push({ kind: "row", id: "logout", icon: "󰗼", title: "Log out", subtitle: pia.accountName !== "" ? "Signed in as " + pia.accountName : "Forget the PIA session on this machine", action: "logout" })
-    else if (!pia.needsLogin) list.push({ kind: "row", id: "login", icon: "󰌆", title: "Log in", subtitle: "Opens a terminal to enter your credentials", action: "login" })
+    // Session state comes from the daemon log (see Service.qml). Logged out is
+    // already covered by the call-to-action at the top, so the section only
+    // exists when it has a row to show.
+    if (pia.loggedIn) {
+      list.push({ kind: "section", id: "sec-account", text: t("ACCOUNT") })
+      list.push({ kind: "row", id: "logout", icon: "󰗼", title: t("Log out"),
+        subtitle: pia.accountName !== "" ? t("Signed in as {name}", { name: pia.accountName }) : t("Forget the PIA session on this machine"), action: "logout" })
+    } else if (!pia.needsLogin) {
+      list.push({ kind: "section", id: "sec-account", text: t("ACCOUNT") })
+      list.push({ kind: "row", id: "login", icon: "󰌆", title: t("Log in"), subtitle: t("Opens a terminal to enter your credentials"), action: "login" })
+    }
     return list
   }
 
@@ -250,6 +266,7 @@ Panel {
     case "picker": togglePicker(); break
     case "copyVpn": pia.copyVpnIp(); break
     case "copyPub": pia.copyPubIp(); break
+    case "revealips": revealIps = !revealIps; break
     case "region": chooseRegion(row.region); break
     case "protocol": pia.toggleProtocol(); break
     case "portforward": pia.togglePortForward(); break
@@ -354,9 +371,12 @@ Panel {
       if (panelFlick) panelFlick.contentY = 0
       pia.refresh(true)
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
-    } else if (pickerOpen) {
-      pickerOpen = false
-      pickerQuery = ""
+    } else {
+      revealIps = false
+      if (pickerOpen) {
+        pickerOpen = false
+        pickerQuery = ""
+      }
     }
   }
   onRowsChanged: restoreCursor()
@@ -390,7 +410,7 @@ Panel {
     function refresh(): string { pia.refresh(true); return "ok" }
     function status(): string { return pia.stateLabel }
     function region(): string { return pia.region }
-    function account(): string { return pia.accountName !== "" ? pia.accountName : "unknown" }
+    function account(): string { return pia.accountName !== "" ? pia.accountName : (pia.loggedIn ? "logged-in" : (pia.needsLogin ? "logged-out" : "unknown")) }
     function setRegion(id: string): string { pia.setRegion(id); return "ok" }
   }
 
@@ -450,6 +470,7 @@ Panel {
         else if (t === "c" || t === "C") pia.copyVpnIp()
         else if (t === "p" || t === "P") pia.copyPubIp()
         else if (t === "g" || t === "G" || t === "/") { if (pia.installed) root.openPicker() }
+        else if (t === "v" || t === "V") root.revealIps = !root.revealIps
       }
 
       Flickable {
@@ -510,7 +531,7 @@ Panel {
 
                   PanelToolTip {
                     visible: powerSwitch.containsMouse
-                    text: pia.active ? "Disconnect from PIA" : "Connect to PIA"
+                    text: root.toggleHint
                     fontFamily: hero.fontFamily
                   }
                 }
@@ -552,7 +573,7 @@ Panel {
             visible: root.pickerOpen
             width: parent.width
             foreground: root.foreground
-            placeholderText: "Search regions"
+            placeholderText: root.t("Search regions")
             text: root.pickerQuery
             onTextChanged: {
               if (root.pickerQuery === text) return
@@ -706,6 +727,8 @@ Panel {
           spacing: Style.space(1)
 
           Text {
+            id: titleText
+            readonly property bool blurred: panelRow.row && panelRow.row.blur === true
             Layout.fillWidth: true
             textFormat: Text.PlainText
             text: panelRow.row && panelRow.row.title ? panelRow.row.title : ""
@@ -714,6 +737,19 @@ Panel {
             font.pixelSize: Style.font.body
             font.bold: panelRow.row && panelRow.row.current === true
             elide: Text.ElideRight
+            // Padding gives the blur room to bleed instead of being clipped
+            // at the glyph edges; the layout height barely changes.
+            leftPadding: blurred ? Style.space(4) : 0
+            topPadding: blurred ? Style.space(2) : 0
+            bottomPadding: blurred ? Style.space(2) : 0
+            layer.enabled: blurred
+            layer.smooth: true
+            layer.effect: MultiEffect {
+              blurEnabled: true
+              blur: 1.0
+              blurMax: 24
+              blurMultiplier: 0.6
+            }
           }
 
           Text {

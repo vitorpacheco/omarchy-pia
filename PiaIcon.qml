@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 // Shield glyph for the bar and the panel hero. `crossed` draws a strike-through
 // for the disconnected state, `pulsing` breathes while a connection is in
@@ -24,7 +25,7 @@ Item {
   Text {
     id: glyph
     anchors.centerIn: parent
-    text: "󰒃"
+    text: Model.SHIELD_GLYPH
     color: root.color
     font.family: root.fontFamily
     font.pixelSize: root.iconSize

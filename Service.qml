@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import "Model.js" as Model
+import "I18n.js" as I18n
 
 // Talks to the PIA daemon through piactl. Owns every Process so Panel.qml can
 // stay a pure view: it reads the properties below and calls the action
@@ -11,6 +12,9 @@ Item {
   id: root
 
   property var settings: ({})
+
+  readonly property string language: I18n.language(Quickshell.env("LC_ALL") || Quickshell.env("LC_MESSAGES") || Quickshell.env("LANG") || Qt.locale().name)
+  function t(source, values) { return I18n.t(language, source, values) }
 
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "")
   readonly property int refreshIntervalSec: Model.intSetting(settings, "refreshIntervalSec", 30, 5, 3600)
@@ -31,6 +35,7 @@ Item {
   property bool transitioning: false
   property string stateLabel: "Checking…"
   property string region: ""
+  property string connectedRegion: ""
   property string vpnIp: ""
   property string pubIp: ""
   property string protocol: ""
@@ -38,7 +43,12 @@ Item {
   property bool requestPortForward: false
   property bool allowLan: false
   property var regions: []
-  property bool needsLogin: false
+  // -1 unknown, 0 logged out, 1 logged in. Fed by the daemon's own log line
+  // ("Reapplying firewall rules; ... loggedIn: N", present while PIA debug
+  // logging is on, its default) and by piactl error messages.
+  property int loginState: -1
+  readonly property bool loggedIn: loginState === 1
+  readonly property bool needsLogin: loginState === 0
   // piactl exposes no account query and the daemon socket rejects foreign
   // clients, so the account name can only be learned when the user logs in
   // through this widget: bin/pia-login writes it to a marker file we read.
@@ -57,8 +67,8 @@ Item {
   property int _desired: -1
   readonly property bool active: _desired === -1 ? connected : (_desired === 1)
   readonly property bool busy: transitioning || actionProcess.running || setProcess.running || _desired !== -1
-  readonly property string regionLabel: Model.regionLabel(region)
-  readonly property string protocolLabel: Model.protocolLabel(protocol)
+  readonly property string regionLabel: I18n.regionLabel(language, Model.connectionRegionLabel(region, connectedRegion, connected))
+  readonly property string protocolLabel: t(Model.protocolLabel(protocol))
 
   signal regionApplied(string id)
 
@@ -70,21 +80,39 @@ Item {
   property string _setOutput: ""
   property string _setError: ""
   property string _lastNotifiedState: ""
+  // Last state from a successful poll. Unlike rawState it survives a transient
+  // poll failure, so a Connected -> (hiccup) -> Disconnected still notifies.
+  property string _lastKnownState: ""
+  property int _statusFailures: 0
   property double _lastRegionsRefreshMs: 0
   property string _probedCtlSetting: ""
   property int _monitorRetryMs: 5000
 
-  readonly property string statusScript: "ctl=\"$1\"\n" +
-    "for k in connectionstate region vpnip pubip protocol portforward requestportforward allowlan; do\n" +
-    "  if v=$(timeout 8 \"$ctl\" get \"$k\" 2>&1); then\n" +
-    "    v=${v//$'\\n'/ }\n" +
-    "    printf '%s=%s\\n' \"$k\" \"$v\"\n" +
-    "  else\n" +
-    "    v=${v//$'\\n'/ }\n" +
-    "    printf 'error=%s\\n' \"${v:-piactl get $k failed}\"\n" +
-    "    exit 1\n" +
-    "  fi\n" +
-    "done\n"
+  readonly property string statusKeys: "connectionstate region vpnip pubip protocol portforward requestportforward allowlan"
+
+  // Every `piactl get` opens its own daemon connection, and during a
+  // transition the daemon can answer slowly, so the calls run in parallel and
+  // the poll takes as long as the slowest one instead of the sum.
+  readonly property string statusScript: "ctl=\"$1\"; keys=\"$2\"\n" +
+    "d=$(mktemp -d) || exit 1\n" +
+    "for k in $keys; do\n" +
+    "  ( timeout 8 \"$ctl\" get \"$k\" >\"$d/$k\" 2>&1; echo $? >\"$d/$k.rc\" ) &\n" +
+    "done\n" +
+    // Unstable API: extract only the location, and tolerate missing support/jq.
+    "( timeout 8 \"$ctl\" -u dump daemon-state 2>/dev/null | jq -r 'select(.connectionState == \"Connected\") | .connectedConfig.vpnLocation.id | select(type == \"string\") | select(test(\"^[a-zA-Z0-9_-]+$\"))' 2>/dev/null >\"$d/connectedregion\" ) &\n" +
+    "wait\n" +
+    "for k in $keys; do\n" +
+    "  rc=$(cat \"$d/$k.rc\" 2>/dev/null); v=$(cat \"$d/$k\" 2>/dev/null); v=${v//$'\\n'/ }\n" +
+    "  if [ \"$rc\" = 0 ]; then printf '%s=%s\\n' \"$k\" \"$v\"\n" +
+    "  else printf 'error=%s\\n' \"${v:-piactl get $k failed (rc $rc)}\"; rm -rf \"$d\"; exit 1; fi\n" +
+    "done\n" +
+    "printf 'connectedregion=%s\\n' \"$(cat \"$d/connectedregion\" 2>/dev/null)\"\n" +
+    "rm -rf \"$d\"\n" +
+    "if [ -r /opt/piavpn/var/daemon.log ]; then\n" +
+    "  l=$(tail -c 400000 /opt/piavpn/var/daemon.log 2>/dev/null | grep -oE 'loggedIn: [01]' | tail -1)\n" +
+    "  [ -n \"$l\" ] && printf 'loggedin=%s\\n' \"${l#loggedIn: }\"\n" +
+    "fi\n" +
+    "exit 0\n"
 
   readonly property string whichScript: "for c in \"$1\" piactl /opt/piavpn/bin/piactl; do\n" +
     "  [ -n \"$c\" ] || continue\n" +
@@ -110,14 +138,20 @@ Item {
     }
   }
 
+  property bool _refreshPending: false
+
   function refreshStatus(forceRegions) {
     if (!installed) return
     var launched = false
-    if (!statusProcess.running) {
+    if (statusProcess.running) {
+      // A state change arrived mid-poll; run again as soon as this one lands
+      // instead of waiting for the next interval.
+      _refreshPending = true
+    } else {
       _statusOutput = ""
       _statusError = ""
       refreshing = true
-      statusProcess.command = ["bash", "-c", statusScript, "pia-status", ctl]
+      statusProcess.command = ["bash", "-c", statusScript, "pia-status", ctl, statusKeys]
       statusProcess.running = true
       launched = true
     }
@@ -136,9 +170,12 @@ Item {
   function resetUnavailable(message, error) {
     daemonUp = false
     connected = false
+    connectedRegion = ""
     transitioning = false
     _desired = -1
     rawState = ""
+    _notifyWanted = ""
+    settleTimer.stop()
     stateLabel = message
     vpnIp = ""
     pubIp = ""
@@ -170,6 +207,7 @@ Item {
       desiredTimeout.stop()
     }
     if (v.region !== undefined) region = String(v.region)
+    connectedRegion = connected ? String(v.connectedregion || "") : ""
     vpnIp = Model.cleanIp(v.vpnip)
     pubIp = Model.cleanIp(v.pubip)
     protocol = String(v.protocol || "").trim().toLowerCase()
@@ -177,22 +215,65 @@ Item {
     requestPortForward = Model.parseBool(v.requestportforward, requestPortForward)
     allowLan = Model.parseBool(v.allowlan, allowLan)
     if (pendingRegion !== "" && region === pendingRegion) pendingRegion = ""
-    if (connected || transitioning) needsLogin = false
+    if (v.loggedin === "1") loginState = 1
+    else if (v.loggedin === "0" && !connected && !transitioning) loginState = 0
+    if (connected || transitioning) loginState = 1
     lastError = ""
 
-    maybeNotify(previousState, info)
+    // Resolve a held notification first; if it was dropped because the state
+    // moved on, the new transition still gets its own chance below.
+    if (_notifyWanted !== "") checkSettled()
+    if (_notifyWanted === "") maybeNotify(previousState, info)
   }
+
+  // piactl flips to Connected/Disconnected a beat before the tunnel details
+  // settle (VPN IP appears or clears). Hold the notification until the IPs
+  // agree with the state, polling briefly, so it never fires mid-transition.
+  property string _notifyWanted: ""
+  property int _settleTries: 0
 
   function maybeNotify(previousState, info) {
     if (!notificationsEnabled) return
     if (previousState === "" || previousState === info.raw) return
     if (info.raw !== "Connected" && info.raw !== "Disconnected" && info.raw !== "Interrupted") return
     if (_lastNotifiedState === info.raw) return
-    _lastNotifiedState = info.raw
-    var title = info.raw === "Connected" ? "VPN connected" : (info.raw === "Interrupted" ? "VPN interrupted" : "VPN disconnected")
-    var body = info.raw === "Connected" ? regionLabel + (vpnIp !== "" ? " · " + vpnIp : "") : "Private Internet Access"
-    Quickshell.execDetached(["notify-send", "-a", "Private Internet Access", "-i", "network-vpn-symbolic",
-      "-h", "string:x-canonical-private-synchronous:pia-vpn", title, body])
+    if (info.raw === "Interrupted") {
+      sendNotification(info.raw)
+      return
+    }
+    _notifyWanted = info.raw
+    _settleTries = 0
+    checkSettled()
+  }
+
+  function checkSettled() {
+    if (_notifyWanted === "") return
+    if (rawState !== _notifyWanted) {
+      // State moved on before the details settled; drop this one.
+      _notifyWanted = ""
+      settleTimer.stop()
+      return
+    }
+    var settled = _notifyWanted === "Connected" ? (vpnIp !== "" && pubIp !== "") : (vpnIp === "")
+    if (settled || _settleTries >= 5) {
+      var state = _notifyWanted
+      _notifyWanted = ""
+      settleTimer.stop()
+      sendNotification(state)
+      return
+    }
+    _settleTries += 1
+    settleTimer.restart()
+  }
+
+  function sendNotification(state) {
+    _lastNotifiedState = state
+    var title = state === "Connected" ? "VPN connected" : (state === "Interrupted" ? "VPN interrupted" : "VPN disconnected")
+    // No addresses in the toast: the panel blurs them for a reason.
+    var body = state === "Connected" ? regionLabel : "Private Internet Access"
+    Quickshell.execDetached(["notify-send", "-a", "Private Internet Access",
+      "-h", "string:omarchy-glyph:" + Model.SHIELD_GLYPH,
+      "-h", "string:x-canonical-private-synchronous:pia-vpn", t(title), body])
   }
 
   function applyRegions(raw) {
@@ -214,7 +295,7 @@ Item {
     var script = backgroundMode
       ? "\"$1\" background enable >/dev/null 2>&1; exec \"$1\" connect"
       : "exec \"$1\" connect"
-    runAction(["bash", "-c", script, "pia-connect", ctl], "Connecting…")
+    runAction(["bash", "-c", script, "pia-connect", ctl], t("Connecting…"))
   }
 
   function disconnect() {
@@ -232,13 +313,13 @@ Item {
       return
     }
     pendingRegion = regionId
-    runSet([ctl, "set", "region", regionId], "region", "Switching to " + Model.regionLabel(regionId) + "…")
+    runSet([ctl, "set", "region", regionId], "region", t("Switching to {name}…", { name: I18n.regionLabel(language, Model.regionLabel(regionId)) }))
   }
 
   function setProtocol(value) {
     var proto = String(value || "").toLowerCase()
     if (!installed || (proto !== "wireguard" && proto !== "openvpn") || setProcess.running) return
-    runSet([ctl, "set", "protocol", proto], "protocol", "Switching to " + Model.protocolLabel(proto) + "…")
+    runSet([ctl, "set", "protocol", proto], "protocol", t("Switching to {name}…", { name: Model.protocolLabel(proto) }))
   }
 
   function toggleProtocol() {
@@ -248,7 +329,7 @@ Item {
   function setRequestPortForward(enabled) {
     if (!installed || setProcess.running) return
     var flag = enabled ? "true" : "false"
-    runSet([ctl, "set", "requestportforward", flag], "portforward", enabled ? "Requesting port forwarding…" : "Port forwarding off")
+    runSet([ctl, "set", "requestportforward", flag], "portforward", enabled ? t("Requesting port forwarding…") : t("Port forwarding off"))
   }
 
   function togglePortForward() {
@@ -258,7 +339,7 @@ Item {
   function setAllowLan(enabled) {
     if (!installed || setProcess.running) return
     var flag = enabled ? "true" : "false"
-    runSet([ctl, "set", "allowlan", flag], "allowlan", enabled ? "LAN access allowed" : "LAN access blocked")
+    runSet([ctl, "set", "allowlan", flag], "allowlan", enabled ? t("LAN access allowed") : t("LAN access blocked"))
   }
 
   function toggleAllowLan() {
@@ -270,8 +351,8 @@ Item {
 
   function login() {
     if (!installed) return
-    Quickshell.execDetached(["bash", "-c", "rm -f \"$1\"; exec omarchy-launch-tui --app-id=pia-login bash \"$2\" \"$3\" \"$1\"", "pia-login-launch", loginMarker, pluginDir + "bin/pia-login", ctl])
-    actionStatus = "Opened the PIA login in a terminal"
+    Quickshell.execDetached(["bash", "-c", "rm -f \"$1\"; exec omarchy-launch-tui --app-id=pia-login bash \"$2\" \"$3\" \"$1\" \"$4\"", "pia-login-launch", loginMarker, pluginDir + "bin/pia-login", ctl, language])
+    actionStatus = t("Opened the PIA login in a terminal")
     actionStatusTimer.restart()
     loginPollTimer.restart()
   }
@@ -290,19 +371,20 @@ Item {
     _desired = -1
     accountName = ""
     accountLearned("")
-    runAction([ctl, "logout"], "Logging out…")
+    loginState = 0
+    runAction([ctl, "logout"], t("Logging out…"))
   }
 
   function copyToClipboard(value, label) {
     var text = String(value || "")
     if (text === "") return
     Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(text) + " | wl-copy"])
-    actionStatus = "Copied " + (label || text)
+    actionStatus = t("Copied {value}", { value: label || text })
     actionStatusTimer.restart()
   }
 
-  function copyVpnIp() { copyToClipboard(vpnIp, "VPN IP " + vpnIp) }
-  function copyPubIp() { copyToClipboard(pubIp, "public IP " + pubIp) }
+  function copyVpnIp() { copyToClipboard(vpnIp, t("VPN IP {ip}", { ip: vpnIp })) }
+  function copyPubIp() { copyToClipboard(pubIp, t("public IP {ip}", { ip: pubIp })) }
 
   function runAction(command, label) {
     if (actionProcess.running) return
@@ -324,11 +406,11 @@ Item {
   }
 
   function failWith(stderr, stdout, fallback) {
-    var text = Model.elide(stderr || stdout || fallback)
+    var text = Model.elide(stderr || stdout || t(fallback))
     lastError = text
     actionStatus = text
     actionStatusTimer.restart()
-    if (Model.looksLikeLoginError(text)) needsLogin = true
+    if (Model.looksLikeLoginError(text)) loginState = 0
   }
 
   // ------------------------------------------------------------ timers
@@ -355,6 +437,20 @@ Item {
       if (root.daemonUp || ticks >= 15) startupRamp.running = false
       else root.refresh()
     }
+  }
+
+  Timer {
+    id: statusRetry
+    interval: 1500
+    repeat: false
+    onTriggered: root.refresh()
+  }
+
+  Timer {
+    id: settleTimer
+    interval: 1200
+    repeat: false
+    onTriggered: root.refresh()
   }
 
   Timer {
@@ -466,8 +562,24 @@ Item {
       root.refreshing = false
       var stdout = String(statusStdout.text || root._statusOutput || "")
       var stderr = String(statusStderr.text || root._statusError || "")
-      if (exitCode === 0 || stdout.indexOf("error=") !== -1) root.applyStatus(stdout)
-      else root.resetUnavailable("Unavailable", Model.elide(stderr || stdout))
+      var parsed = Model.parseStatus(stdout)
+      if (exitCode === 0 && parsed.ok) {
+        root._statusFailures = 0
+        root.applyStatus(stdout)
+      } else {
+        root._statusFailures += 1
+        var message = parsed.ok ? (stderr || stdout) : parsed.error
+        if (root._statusFailures < 3 && root.daemonUp && !Model.looksLikeDaemonError(message)) {
+          // Likely a slow answer mid-transition: keep what we show and retry soon.
+          statusRetry.restart()
+        } else {
+          root.resetUnavailable(Model.looksLikeDaemonError(message) ? "PIA daemon not running" : "Unavailable", Model.elide(message))
+        }
+      }
+      if (root._refreshPending) {
+        root._refreshPending = false
+        Qt.callLater(function() { root.refreshStatus(false) })
+      }
     }
   }
 
@@ -543,8 +655,9 @@ Item {
       var name = String(markerStdout.text || root._markerOutput || "").trim()
       if (name === "") return
       root.rememberAccount(name)
+      root.loginState = 1
       loginPollTimer.stop()
-      root.actionStatus = "Logged in as " + name
+      root.actionStatus = root.t("Logged in as {name}", { name: name })
       actionStatusTimer.restart()
       delayedRefresh.restart()
     }
@@ -553,9 +666,28 @@ Item {
   // piactl monitor streams a line on every connection state change, so the
   // bar reacts immediately instead of waiting for the next poll.
   function startMonitor() {
-    if (!installed || monitorProcess.running) return
-    monitorProcess.command = ["bash", "-c", "exec \"$1\" monitor connectionstate", "pia-monitor", ctl]
-    monitorProcess.running = true
+    if (!installed) return
+    if (!monitorProcess.running) {
+      monitorProcess.command = ["bash", "-c", "exec \"$1\" monitor connectionstate", "pia-monitor", ctl]
+      monitorProcess.running = true
+    }
+    if (!ipMonitorProcess.running) {
+      ipMonitorProcess.command = ["bash", "-c", "exec \"$1\" monitor vpnip", "pia-monitor-ip", ctl]
+      ipMonitorProcess.running = true
+    }
+  }
+
+  Process {
+    id: ipMonitorProcess
+    running: false
+    command: []
+    stdout: SplitParser {
+      onRead: function(line) { monitorDebounce.restart() }
+    }
+    onExited: function(exitCode) {
+      if (!root.installed) return
+      if (!monitorRetry.running) { monitorRetry.interval = root._monitorRetryMs; monitorRetry.restart() }
+    }
   }
 
   Process {
@@ -580,10 +712,12 @@ Item {
     installed = false
     ctl = ""
     if (monitorProcess.running) monitorProcess.running = false
+    if (ipMonitorProcess.running) ipMonitorProcess.running = false
     refresh()
   }
 
   Component.onDestruction: {
     if (monitorProcess.running) monitorProcess.running = false
+    if (ipMonitorProcess.running) ipMonitorProcess.running = false
   }
 }

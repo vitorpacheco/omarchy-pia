@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.vitorpacheco.pia",
   "name": "Private Internet Access",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Vitor Pacheco",
   "license": "MIT",
   "description": "Private Internet Access VPN in the Omarchy bar: connect, disconnect, pick a region, switch protocol, port forwarding and quick IP copy, all through piactl.",
