@@ -136,13 +136,14 @@ exit 0`);
       ['de_DE', 'Username: ', 'Logged in as test-account']
     ]) {
       const prompts = path.join(dir, 'prompts'); fs.writeFileSync(prompts, '');
-      const result = spawnSync('bash', [path.join(root, 'bin/pia-login'), path.join(dir, 'piactl'), path.join(dir, 'marker'), locale], {
-        env: { ...process.env, PATH: dir + ':' + process.env.PATH, TEST_PROMPTS: prompts, TEST_CREDENTIAL_PATH: path.join(dir, 'credential-path') }, encoding: 'utf8'
+      const result = spawnSync('bash', [path.join(root, 'bin/pia-login'), path.join(dir, 'piactl'), path.join(dir, 'omarchy-pia-login'), locale], {
+        env: { ...process.env, XDG_RUNTIME_DIR: dir, PATH: dir + ':' + process.env.PATH, TEST_PROMPTS: prompts, TEST_CREDENTIAL_PATH: path.join(dir, 'credential-path') }, encoding: 'utf8'
       });
       assert.equal(result.status, 0, result.stderr);
       assert.ok(result.stdout.includes(success));
       assert.equal(fs.readFileSync(prompts, 'utf8').split('\n')[0], prompt);
-      assert.equal(fs.readFileSync(path.join(dir, 'marker'), 'utf8'), 'test-account\n');
+      assert.equal(fs.readFileSync(path.join(dir, 'omarchy-pia-login'), 'utf8'), 'test-account\n');
+      fs.unlinkSync(path.join(dir, 'omarchy-pia-login'));
       assert.equal(fs.existsSync(fs.readFileSync(path.join(dir, 'credential-path'), 'utf8')), false);
       assert.equal(result.stdout.includes('dummy-secret'), false);
     }

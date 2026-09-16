@@ -346,15 +346,12 @@ Item {
     setAllowLan(!allowLan)
   }
 
-  readonly property string loginMarker: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-pia-login." + (Quickshell.env("USER") || "user")
   property string _markerOutput: ""
 
   function login() {
-    if (!installed) return
-    Quickshell.execDetached(["bash", "-c", "rm -f \"$1\"; exec omarchy-launch-tui --app-id=pia-login bash \"$2\" \"$3\" \"$1\" \"$4\"", "pia-login-launch", loginMarker, pluginDir + "bin/pia-login", ctl, language])
-    actionStatus = t("Opened the PIA login in a terminal")
-    actionStatusTimer.restart()
-    loginPollTimer.restart()
+    if (!installed || loginLaunchProcess.running) return
+    loginLaunchProcess.command = ["python3", pluginDir + "bin/pia-login-marker", "launch", ctl, language]
+    loginLaunchProcess.running = true
   }
 
   signal accountLearned(string name)
@@ -496,7 +493,7 @@ Item {
       root.refresh()
       if (!markerProcess.running) {
         root._markerOutput = ""
-        markerProcess.command = ["bash", "-c", "[ -f \"$1\" ] || exit 3; cat \"$1\"; rm -f \"$1\"", "pia-marker", root.loginMarker]
+        markerProcess.command = ["python3", root.pluginDir + "bin/pia-login-marker", "read"]
         markerProcess.running = true
       }
       if (ticks >= 90) { ticks = 0; loginPollTimer.stop() }
@@ -642,6 +639,22 @@ Item {
         else actionStatusTimer.restart()
       }
       delayedRefresh.restart()
+    }
+  }
+
+  Process {
+    id: loginLaunchProcess
+    running: false
+    command: []
+    stderr: StdioCollector { id: loginLaunchStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.failWith(String(loginLaunchStderr.text || ""), "", "Login failed.")
+        return
+      }
+      root.actionStatus = root.t("Opened the PIA login in a terminal")
+      actionStatusTimer.restart()
+      loginPollTimer.restart()
     }
   }
 

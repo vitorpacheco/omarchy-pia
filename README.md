@@ -40,6 +40,7 @@ open.
 
 - `wl-copy` for the copy actions and `gum` for the login prompt (both come
   with Omarchy).
+- Python 3 for secure login marker handling.
 - `jq` to show the actual location when using Automatic region.
 - `notify-send` (`libnotify`) for desktop notifications, plus Bash, GNU
   coreutils and grep for the CLI helpers (included with Omarchy).
@@ -59,7 +60,11 @@ flag from PIA's daemon log, and uses the terminal, clipboard and notification
 tools listed above. Login credentials are passed to `piactl` in a temporary
 file with mode `600`, which is removed on exit. The account name and recent
 regions are saved in the widget's own entry in `shell.json`; a login marker
-containing the account name is also written under `XDG_RUNTIME_DIR` (or `/tmp`).
+containing the account name is written with mode `600` under `XDG_RUNTIME_DIR`.
+Login from the widget requires this directory to be owned by the current user
+with mode `700`, with no symlink components; there is no `/tmp` fallback.
+Marker creation is exclusive, and reads and removal reject symlinks, foreign
+owners, unsafe permissions, and multiple hard links.
 
 ## Install
 
